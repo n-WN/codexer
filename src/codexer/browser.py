@@ -17,7 +17,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Footer, Header, Input, ListItem, ListView, Static
+from textual.widgets import Footer, Input, ListItem, ListView, Static
 
 from rich.align import Align
 from rich.console import Group
@@ -448,13 +448,13 @@ class CodexerApp(App):
     Horizontal#control-row {
         padding: 0 1;
         background: #1b1e24;
-        border-bottom: tall #2a3240;
         height: auto;
         min-height: 3;
     }
 
     Input#search-input {
-        border: tall #5c6bc0;
+        /* Remove heavy border to avoid top-left corner box glyph */
+        /* border: tall #5c6bc0; */
         background: #101218;
         color: #f0f3ff;
         width: 1fr;
@@ -475,7 +475,6 @@ class CodexerApp(App):
     ListView#session-list {
         width: 48;
         min-width: 36;
-        border: tall #37474f;
     }
 
     Vertical#detail-column {
@@ -490,7 +489,6 @@ class CodexerApp(App):
 
     ListItem.--highlight {
         background: #2c3f66;
-        border-left: tall #90caf9;
     }
 
     ListItem.--highlight Static {
@@ -551,6 +549,7 @@ class CodexerApp(App):
         sessions: Sequence[SessionEntry],
         initial_query: str,
         config: MatchConfig,
+        resume_template: str = "codex resume {target}",
     ) -> None:
         super().__init__()
         self.sessions = list(sessions)
@@ -560,9 +559,9 @@ class CodexerApp(App):
         self.status_message: str = ""
         self._cwd_last: Optional[str] = config.cwd_filter
         self._last_resume_command: Optional[str] = None
+        self.resume_template = resume_template
 
     def compose(self) -> ComposeResult:
-        yield Header(show_clock=False)
         with Container(id="layout"):
             with Vertical(id="main-column"):
                 with Horizontal(id="control-row"):
@@ -584,7 +583,8 @@ class CodexerApp(App):
         if self.filtered:
             list_view.index = 0
             self.show_entry(self.filtered[0])
-        self.query_one("Input#search-input", Input).focus()
+        # Keep focus on the list by default for quick keyboard navigation
+        list_view.focus()
 
     def _status_text(self) -> str:
         sort_desc = {
@@ -638,6 +638,9 @@ class CodexerApp(App):
 
     def action_focus_search(self) -> None:
         self.query_one("Input#search-input", Input).focus()
+
+    def action_focus_list(self) -> None:
+        self.query_one(ListView).focus()
 
     def action_prompt_cwd(self) -> None:
         self.push_screen(CwdPrompt(self.config.cwd_filter), callback=self._on_cwd_selected)
@@ -738,7 +741,9 @@ class CodexerApp(App):
             event.stop()
             self.action_resume_session()
         elif event.key == "escape" and isinstance(self.focused, Input):
-            self.action_focus_search()
+            # When editing search, Esc returns focus to the list
+            event.stop()
+            self.action_focus_list()
 
     def _current_entry(self) -> Optional[SessionEntry]:
         if not self.filtered:
@@ -799,8 +804,7 @@ class CodexerApp(App):
                 "**CWDs:** ``{}``".format("`, `".join(ordered_cwds))
             )
         sections.append(Markdown("\n\n".join(metadata_lines)))
-        resume_target = entry.session_id or str(entry.path)
-        resume_command = f"codex resume {resume_target}"
+        resume_command = format_resume_command(entry.session_id, entry.path, self.resume_template)
         sections.append(Text(f"Resume command: {resume_command}"))
         self._last_resume_command = resume_command
         sections.append(Text(f"Log file: {entry.path}"))
@@ -815,6 +819,24 @@ def build_session_list(paths: Sequence[Path]) -> List[SessionEntry]:
         if entry:
             entries.append(entry)
     return entries
+
+
+def format_resume_command(
+    session_id: Optional[str],
+    path: Path,
+    template: str,
+) -> str:
+    """Format the shell command used to resume a session.
+
+    Placeholders in template:
+      - {id}: the session id if known, else empty string
+      - {path}: the absolute path to the log file
+      - {target}: preferred target (id if available, else path)
+    """
+    id_value = session_id or ""
+    path_value = str(path)
+    target_value = session_id or path_value
+    return template.format(id=id_value, path=path_value, target=target_value)
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -851,6 +873,22 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         action="store_true",
         help="Sort ascending instead of descending.",
     )
+    parser.add_argument(
+        "--all",
+        dest="all_sessions",
+        action="store_true",
+        help="Show all sessions (disable CWD filter).",
+    )
+    parser.add_argument(
+        "--print-command",
+        action="store_true",
+        help="Print the resume command on selection and exit instead of executing it.",
+    )
+    parser.add_argument(
+        "--resume-template",
+        default="codex resume {target}",
+        help="Template for the printed resume command (placeholders: {id}, {path}, {target}).",
+    )
     args = parser.parse_args(argv)
 
     paths = gather_files(args.targets)
@@ -865,8 +903,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     initial_query = " ".join(args.keyword or [])
 
-    if args.cwd is None:
-        cwd_filter: Optional[str] = str(Path.cwd())
+    if args.all_sessions:
+        cwd_filter: Optional[str] = None
+    elif args.cwd is None:
+        cwd_filter = str(Path.cwd())
     else:
         cwd_filter = str(Path(args.cwd).expanduser()) if args.cwd else None
 
@@ -877,9 +917,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         ascending=args.ascending,
     )
 
-    app = CodexerApp(entries, initial_query=initial_query, config=config)
+    app = CodexerApp(
+        entries,
+        initial_query=initial_query,
+        config=config,
+        resume_template=args.resume_template,
+    )
     result = app.run()
     if isinstance(result, ResumeRequest):
+        if args.print_command:
+            # Emit a single line command suitable for shell capture
+            command = format_resume_command(result.session_id, result.session_path, args.resume_template)
+            print(command)
+            return 0
         codex_executable = shutil.which("codex")
         if codex_executable is None:
             print(

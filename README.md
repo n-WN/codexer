@@ -44,6 +44,30 @@ if your logs live elsewhere.
 Use the search bar to type tokens (space separated). Press `f` to adjust the CWD
 filter; submit a blank value to clear it.
 
+### Print-only mode (fzf-style)
+
+If you prefer that Enter does not execute anything but emits a shell command you
+can run or edit yourself, use:
+
+```bash
+codexer --print-command            # prints: codex resume <id-or-path>
+codexer --print-command --resume-template 'codex resume --fast {target}'
+```
+
+Placeholders for `--resume-template`:
+
+- `{id}` – session id if available, else empty
+- `{path}` – absolute path to the log file
+- `{target}` – preferred target (`id` if present; otherwise `path`)
+
+Tip: combine with command substitution to chain parameters yourself:
+
+```bash
+cmd=$(codexer --print-command)
+echo "About to run: $cmd --dry-run"
+$cmd --dry-run
+```
+
 ## Develop
 
 ```bash

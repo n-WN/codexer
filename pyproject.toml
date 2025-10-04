@@ -1,6 +1,6 @@
 [project]
 name = "codexer"
-version = "0.1.0"
+version = "0.1.1"
 description = "Interactive TUI for exploring coding-assistant session logs."
 readme = "README.md"
 authors = [
@@ -13,7 +13,7 @@ dependencies = [
 ]
 
 [project.scripts]
-codexer = "codexer:main"
+codexer = "codexer:cli"
 
 [build-system]
 requires = ["hatchling"]
